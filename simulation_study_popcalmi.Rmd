@@ -1,0 +1,290 @@
+---
+title: "Application example of population calibrated multiple imputation on simulated data and comparison with mice"
+author: "Nanina Anderegg"
+date: "10/01/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+options(scipen = 1, digits = 3)
+require(tidyverse)
+require(nnet)
+require(MASS)
+require(mice)
+require(BB)
+set.seed(1248)
+theme_set(theme_bw())
+source("fn_popcal_mi.R")
+```
+
+The main aim of this example is to show how the function `fn_popcal_mi()` provided in the R-Script `fn_popcal_mi.R` can be applied. The function `fn_popcal_mi()` implements the population-calibrated approach proposed by [Pham et al](https://onlinelibrary.wiley.com/doi/full/10.1002/sim.8004). In addition, we compare the population-calibrated imputation approach to the standard multiple imputation approach in `mice`. The application and comparison is based on simulated data. Here we show the application to simulated data where we want to impute a categorical variable with 4 levels containing some missing entries. Note that the function `fn_popcal_mi()` is flexible and can also handle categorical variables with a different number of (>2) levels. In the case of a binary variable with missing entries the function `fn_popcal_mi()` can be adapted following the description in [Pham et al](https://onlinelibrary.wiley.com/doi/full/10.1002/sim.8004).   
+
+## Simulation of data
+
+We simulate data with 3 covariates (`sex`, `age`, `country`) which are linearly related to a unspecific outcome (`outcome`). We assume that the main analysis of interest is a linear regression between the dependent variable `outcome` and the independent variables `sex`, `age` and `country`. We assume that `country` has 4 levels (country A, B, C, D) and is missing for some observations. We simulate 1200 observations including 400 males and 800 females. For both males and females we assume that half of them is <50 years old and half of them is 50+ years old. `country` levels are simulated using a multinomial distribution dependent on both `sex` and `age`. The `outcome` is simulated using a linear relationship with `age`, `sex`, and `country`. We construct a missing not at random indicator for observations whose `country` variable will be set to missing with the following:
+
+ - First we construct for each observation $i$ a probability of missing at random $p_{mar,i}$ dependent on the `age`, `sex`, and `outcome` of observation $i$.
+ - Second, dependent on the "true" `country` level of observation $i$, we construct a missing not at random probability $p_{mnar,i}$, by multiplying the missing at random probability $p_{mar,i}$ by different factors (varying by the levels of `country`). With this, the probability of a `country` missing does not only depend on the observed variables `age`, `sex`, and `outcome` (MAR), but also on the level of the `country` itself (MNAR). 
+ - Third, we construct a missing not at random indicator $I_{mnar,i}$ using a binomial distribution with probability $p_{mnar,i}$ . 
+ 
+For all observations with $I_{mnar,i} == 1$  the country will be set to missing. In the following we will keep both the true original country values in the variable `country_true`, and the country variable including the missing observations in `country_mnar`. 
+
+
+```{r simulate_data, warning= FALSE, message = FALSE}
+## simulate data
+data.sim <- as_tibble(data.frame(
+  # 200 males, 400 females, half of each <50 and half 50+ years old
+  sex = rep(c("male","female"), times=c(200,400)), 
+  age = rep(c("0-50", "50+"), 600))) %>% 
+  mutate(id=row_number()) %>%
+  # create country covariate (dependent on both age and sex) which will later be set partly to missing
+  mutate(
+    linpred_2 = 0.6 + 0.5*as.numeric(sex=="female") -  2*as.numeric(age=="50+") + rnorm(1, 0,0.3), 
+    linpred_3 = 1.7 + 0.1*as.numeric(sex=="female") -  3*as.numeric(age=="50+") + rnorm(1, 0,0.3),
+    linpred_4 = 0 - 0.2*as.numeric(sex =="female") - 1*as.numeric(age=="50+") + rnorm(1, 0,0.3)) %>% 
+  mutate(prob_1 = 1/(1+(exp(linpred_2) + exp(linpred_3) + exp(linpred_4))), 
+         prob_2 = exp(linpred_2)/(1+(exp(linpred_2) + exp(linpred_3) + exp(linpred_4))), 
+         prob_3 = exp(linpred_3)/(1+(exp(linpred_2) + exp(linpred_3) + exp(linpred_4))), 
+         prob_4 = exp(linpred_4)/(1+(exp(linpred_2) + exp(linpred_3) + exp(linpred_4)))) %>% 
+  mutate(probssum = prob_1 + prob_2 + prob_3 + prob_4) %>% 
+  rowwise() %>%
+  mutate(country_true = which.max(rmultinom(n=1, size=1, prob=c(prob_1, prob_2, prob_3, prob_4))))  %>%
+  mutate(country_true = factor(country_true, levels=c(1,2,3,4), labels=c("country A", "country B", "country C", "country D"))) %>%
+  # simulate outcome for main model (still with complete categorical covariate): 
+  mutate(outcome = 0.7 + 1.6*as.numeric(sex=="male") - 0.4*as.numeric(age=="50+") + as.numeric(country_true=="country B") -2*as.numeric(country_true=="country C") + 1.5*as.numeric(country_true=="country D") + rnorm(1,0,1)) %>% 
+  mutate(linpred_mar = 2*as.numeric(sex=="female") - 0.3*as.numeric(age=="50+") + 
+            0.2 *outcome + rnorm(1,0,1)) %>% 
+  mutate(prob_mar = 1/(1+exp(linpred_mar))) %>% 
+  mutate(prob_mnar = case_when(country_true == "country A" ~ prob_mar*1, 
+                                         country_true == "country B" ~ prob_mar*0.5, 
+                                         country_true == "country C" ~ prob_mar*0.7, 
+                                         country_true == "country D" ~ prob_mar*0.9)) %>% 
+  rowwise() %>%
+  mutate(mnar_indicator = rbinom(n = 1,size = 1, prob_mnar)) %>% 
+  mutate(country_mnar = if_else(mnar_indicator == 0, country_true, NA_integer_)) %>% 
+  dplyr::select(sex, age, country_true, country_mnar, outcome)
+
+true_proportion_data <- prop.table(table(data.sim$country_true))
+tot_missing = sum(is.na(data.sim$country_mnar))/nrow(data.sim)
+```
+
+With the complete data, we have `r sprintf("%.1f", 100*true_proportion_data[1])`% of observations from country A, `r sprintf("%.1f", 100*true_proportion_data[2])`% from country B, `r sprintf("%.1f", 100*true_proportion_data[3])`% von country C, and `r sprintf("%.1f", 100*true_proportion_data[4])`% from country D. For this study we assume that these proportions are known without uncertainty from an external (aggregate) data source (e.g. census data), but cannot be linked to individual observations.
+In the incomplete data, `r sprintf("%.1f", 100*tot_missing)`% of observations have a missing country. The proportion of missing information varies by country level (Figure 1). 
+
+
+```{r plot_country, fig.width=5, fig.height=4, fig.align="center", fig.cap="Figure 1. Comparison of true country distribution and missing country distribution", warning=FALSE}
+true_dist <- data.sim %>% group_by(country_true) %>% 
+  summarise(tot = n()) %>% 
+  rename(country = country_true) %>% 
+  mutate(variable = "complete country")
+mis_dist <- data.sim %>% filter(!is.na(country_mnar)) %>%
+  group_by(country_mnar) %>% 
+  summarise(tot = n()) %>% 
+  rename(country = country_mnar) %>% 
+  mutate(variable = "incomplete country") 
+
+dist_tot <- bind_rows(true_dist, mis_dist) %>% 
+  group_by(country) %>% 
+  mutate(prop_missing = (tot[variable=="complete country"]-tot[variable=="incomplete country"])/
+           tot[variable=="complete country"]) %>% 
+  mutate(prop_missing_txt = paste0(sprintf("%.1f", 100*prop_missing), "%\nmissing")) %>% 
+  mutate(prop_missing_txt = ifelse(variable == "complete country", NA_character_, prop_missing_txt)) %>% 
+  mutate(y_text = tot[variable == "complete country"] - 1/2*(tot[variable == "complete country"] - tot[variable == "incomplete country"]))
+
+dist_tot %>% 
+  ggplot(aes(x=country, y=tot, fill= variable)) +
+  geom_bar(stat="identity", position = "dodge") + 
+  geom_text(aes(x=country, y = y_text, label=prop_missing_txt),size=3, hjust = -0.1) + 
+  labs(y= "Total", x=NULL, fill = NULL) + 
+  theme(legend.position = "bottom") + 
+  scale_fill_manual(values=c("tomato", "dodgerblue"), labels=c("complete data", "incomplete data"))
+```
+
+
+*Note. For this analysis we assume that the true distribution of the incomplete variable is known on aggregate without uncertainty. However, the approach can also be used if the distribution of the incomplete variable is not “known” but estimated from an external data source larger or smaller than the data of the study. We could for example have the following estimates of the true distribution derived from a external data source with n=10000 observations.*
+
+```{r census_dist, message = FALSE, warning = FALSE}
+## it could be that we do not know the true distribution, but only an estimate of it by some other data source. This could for example be.
+external_proportion_estimated = rmultinom(n = 1, size = 10000, prop.table(table(data.sim$country_true)/nrow(data.sim)))
+external_proportion_estimated = c(external_proportion_estimated/sum(external_proportion_estimated))
+##
+
+external_prop_estimated <- data.frame(country = c("country A", "country B", "country C", "country D"), 
+                         external_proportion_estimated = external_proportion_estimated)
+external_prop_estimated
+```
+
+## Multiple imputation of missing country
+
+### Standard multiple imputation (mice)
+
+First we impute missing `country` information using `mice` basd on variables `age`, `sex` and `outcome`  (with the default configurations). 
+
+```{r sim_mice, message = FALSE, warning=FALSE}
+data.mice <- data.sim %>% 
+  dplyr::select(age, sex, country_mnar, outcome)
+data.mice.impute <- mice(data.mice, m=50, printFlag = FALSE)
+
+data.mice.long <- data.frame(NULL)
+for (i in 1:50){
+  data.temp <- data.sim
+  data.temp$country_mnar[is.na(data.temp$country_mnar)] <- data.mice.impute$imp$country_mnar[,i]
+  data.temp$imp <- i
+  data.mice.long <- bind_rows(data.mice.long, data.temp)
+}
+```
+
+### Population-calibrated multiple imputation
+
+In a next step we multiply impute missing `country` information using the population-calibrated imputation approach. For this we need - next to the data - the true proportions of observations in country A, B, C, D, which are known on aggregate level, i.e. 
+
+```{r, true_props, message = FALSE, warning = FALSE}
+true_proportion_data
+
+```
+
+We can use the function `fn_popcal_mi()` provided in the R-script `fn_popcal_mi.R`. For the function the following arguments need to be provided:
+
+ - `data` data, containing all variables (including the missing variable) that should be used in the imputation model. The missing variable has to be of class factor.
+ - `missing_covariate` the name of the missing covariate in the `data`. Must be a string/character.
+ - `true_distribution` A vector with the true proportions of each level of the missing variable known on aggregate (on the population level). The first entry correspond to the proportion for the 1st level of the missing variable, the second entry of the vector to the second level of the missing variable etc.
+ - `m` the number of imputed datasets that will be generated, optional with default `m=50`.
+
+
+```{r sim_popcal, message = FALSE, warning=FALSE,, results=FALSE}
+data <- data.sim %>% 
+  dplyr::select(age, sex, country_mnar, outcome)
+data.popcal <- fn_popcal_mi(data=data, missing_covariate = "country_mnar", true_distribution = true_proportion_data, m=50)
+data.popcalmi <- data.popcal$imp
+
+
+data.popcal.long <- data.frame(NULL)
+for (i in 1:50){
+  data.temp <- data.sim
+  data.temp$country_mnar[is.na(data.temp$country_mnar)] <- data.popcalmi[[i]]
+  data.temp$imp <- i
+  data.popcal.long <- bind_rows(data.popcal.long, data.temp)
+}
+```
+
+*Note. There is an additional (optional) parameter that can be provided to the function `fn_popcal_mi()` with default value `true_distribution_n=NULL`. This is used when the true distribution of the missing variable is known with uncertainty, i.e. is estimated from some data source. `true_distribution_n` then corresponds to the sample size of the data that was used to estimate the `external_proportion_true`. In this simulation study, we assume that there is no uncertainty associated with estimating the reference distribution. If we however assumed that we did not know the true distribution of the incomplete country variable, but estimate it from external data, the call of the funciton `fn_popcal_mi()` would be slighly different. With the earlier example of the external estimate `external_proportion_estimate` derived from external data with n=10000, it would be the following:* 
+```{r example_estimated_prop, eval = FALSE}
+f_popcal_mi(data=data, 
+            missing_covariate = "country_mnar", 
+            true_distribution = external_proportion_estimate, 
+            true_distribution_n = 10000, 
+            m=50) 
+```
+
+## Comparison of imputed values 
+
+When we compare the country distribution of the two imputation approaches with the true distribution, we can see that the population-calibrated imputation matches the true country distribution more closely than the standard imputation, especially for country A and country B (Figure 2).
+
+
+```{r plot_comparison, fig.width=5, fig.height=4, fig.align="center", fig.cap="Figure 2. Comparison of true country distribution and imputed country distribution", warning=FALSE}
+
+
+dist.mice <- data.mice.long %>% mutate(Total_obs = n()) %>% 
+  group_by(country = country_mnar) %>% 
+  summarise(prop = n()/Total_obs[1]) %>% 
+  mutate(data = "Standard MI")
+
+dist.popcal <- data.popcal.long %>% mutate(Total_obs = n()) %>% 
+  group_by(country = country_mnar) %>% 
+  summarise(prop = n()/Total_obs[1]) %>% 
+  mutate(data = "Pop-cal MI")
+
+dist.true <- data.sim %>% 
+  ungroup() %>%
+  mutate(Total_obs = n()) %>% 
+  group_by(country = country_true) %>% 
+  summarise(prop = n()/Total_obs[1]) %>% 
+  mutate(data = "True")
+
+dist.data <- bind_rows(dist.mice, dist.popcal, dist.true)
+
+dist.data %>% 
+  mutate(data = factor(data, levels=c("Standard MI", "Pop-cal MI","True"))) %>%
+  ggplot(aes(x=country, y=prop, fill = data)) + 
+  geom_bar(position="dodge", stat="identity", col="black") + 
+  theme_bw() + 
+  scale_y_continuous(labels=scales::percent) + 
+  labs(y="Proportion", x="Levels of imputed covariate", fill="Data") + 
+  theme(legend.position = "bottom") + 
+  scale_fill_manual(values=c("tomato", "dodgerblue", "orange"))
+
+
+```
+
+## Comparison of results of main analysis
+
+In this simulation study the main analysis of interest is a linear regression between the dependent variable `outcome` and the independent variables `age`, `sex`, and `country`. As we simulated the data, we know the true relationship, i.e. `outcome`  = $\color{red}{\text{0.7}}$ + $\color{red}{\text{1.6}}$ * `as.numeric(sex=="male")` + $\color{red}{\text{(-0.4)}}$ * `as.numeric(age=="50+")` + $\color{red}{\text{1}}$ *  `as.numeric(country_true=="country B")`  + $\color{red}{\text{(-2)}}$ * `as.numeric(country_true=="country C")` + $\color{red}{\text{1.5}}$ * `as.numeric(country_true=="country D")`. In the simulated data, the outcome were constructed using this formula and adding for each observation a random draw of the normal distribution with mean 0 and variance 1. 
+We now fit the linear regression `outcome ~ age + sex + country` to the complete data (i.e. the simulated data with `country` = `country_true`, where we have the true country information without any missings), and to both the standard MI and the Pop-cal MI data (with `country` = `country_mnar`, where `country_mnar` contains the imputed country information). For the imputed data, we use the common Rubin's rules aggregation of point-estimates and standard errors of imputed data. We then compare the results of the different fits to the true parameter values. 
+
+```{r plot_regression, fig.width=10, fig.height=6, fig.align="center", fig.cap="Figure 3. Comparison of results from regression fits", warning=FALSE}
+
+fit.true <- lm(outcome ~ sex + age + country_true, data = data.sim)
+
+coef.mice <- matrix(NA, nrow = 50, ncol = 6)
+coef.popcal <- matrix(NA, nrow=50, ncol= 6)
+vcov.mice <- matrix(NA, nrow=50, ncol=6)
+vcov.popcal <- matrix(NA, nrow=50, ncol=6)
+for (i in 1:50){
+  dat <- data.mice.long %>% filter(imp == i)
+  fit <- lm(outcome ~ sex + age + country_mnar, data=dat)
+  coef.mice[i, ] <- coefficients(fit)
+  vcov.mice[i, ] <- diag(vcov(fit))
+  dat.p <- data.popcal.long %>% filter(imp == i)
+  fit.p <- lm(outcome ~ sex + age + country_mnar, data=dat.p)
+  coef.popcal[i,] <- coefficients(fit.p)
+  vcov.popcal[i, ] <- diag(vcov(fit))
+  }
+
+coef.mice.mean = apply(coef.mice, 2, mean)
+coef.popcal.mean = apply(coef.popcal, 2, mean)
+b.mice = diag(var(coef.mice))
+b.popcal = diag(var(coef.popcal))
+u.mice = apply(vcov.mice, 2, mean)
+u.popcal = apply(vcov.popcal, 2, mean)
+
+var.tot.mice <- u.mice + b.mice + b.mice/50
+var.tot.popcal <- u.popcal + b.popcal + b.popcal/50
+
+coef.lb.mice <- coef.mice.mean - 1.96 *sqrt(var.tot.mice)
+coef.ub.mice <- coef.mice.mean + 1.96* sqrt(var.tot.mice)
+
+coef.lb.popcal <- coef.popcal.mean - 1.96*sqrt(var.tot.popcal)
+coef.ub.popcal <- coef.popcal.mean + 1.96*sqrt(var.tot.popcal)
+
+
+coef.true.fit <- coefficients(fit.true)
+coef.lb.fit.true <- confint(fit.true)[,1]
+coef.ub.fit.true <- confint(fit.true)[,2]
+coef.true <- c(0.7, 1.6, -0.4, 1, -2, 1.5)
+coef.lb.true <- c(0.7, 1.6, -0.4, 1, -2, 1.5)
+coef.ub.true <- c(0.7, 1.6, -0.4, 1, -2, 1.5)
+
+
+data.fit <- data.frame(coef = c(coef.true, coef.true.fit, coef.mice.mean, coef.popcal.mean), 
+                       lb = c(coef.lb.true, coef.lb.fit.true, coef.lb.mice, coef.lb.popcal), 
+                       ub = c(coef.ub.true, coef.ub.fit.true, coef.ub.mice, coef.ub.popcal),
+                       method = rep(c("True parameter", "Complete data fit", "Standard MI fit", "Pop-cal MI fit"), each = 6), 
+                       variable = rep(c("Intercept", "Sex male", "age 50+", "country B", "country C", "country D"), times = 4)) %>% 
+  as_tibble() %>% 
+  mutate(variable = factor(variable, levels=rev(c("Intercept", "Sex male", "age 50+", "country B", "country C", "country D")))) %>% 
+  mutate(method = factor(method, levels=c("Standard MI fit", "Pop-cal MI fit", "Complete data fit", "True parameter")))
+
+
+data.fit  %>% 
+  ggplot(aes(x=variable, y= coef, col = method)) + 
+  geom_pointrange(aes(ymin = lb, ymax=ub, shape = method), position = position_dodge(0.5)) + 
+  coord_flip() + 
+  labs(col = NULL, x="Variable", y="Parameter estimate", shape = NULL) + 
+  scale_shape_manual(values=c(16,16,16,15))  + 
+  scale_color_manual(values=c("tomato", "dodgerblue", "orange", "black"))
+  
+
+```
+
+The estimated regression coefficients of the standard MI approach are not substantially different from the ones from the Pop-cal Mi approach (Figure 3). However, the confidence intervals of the Pop-cal MI method always include the true parameter value, while this is not the case for the standard MI approach. For standard MI, the confidence intervals of the parameters `Intercept`, `Sex male`, `age 50+`, and `country C` do not include the true parameter value (Figure 3). 
