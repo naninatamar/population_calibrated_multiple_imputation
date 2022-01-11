@@ -15,10 +15,10 @@ require(mice)
 require(BB)
 set.seed(1248)
 theme_set(theme_bw())
-source("fn_popcal_mi.R")
+source("fn_popcal_mi_cat.R")
 ```
 
-The main aim of this example is to show how the function `fn_popcal_mi()` provided in the R-Script `fn_popcal_mi.R` can be applied. The function `fn_popcal_mi()` implements the population-calibrated approach proposed by [Pham et al](https://onlinelibrary.wiley.com/doi/full/10.1002/sim.8004). In addition, we compare the population-calibrated imputation approach to the standard multiple imputation approach in `mice`. The application and comparison is based on simulated data. Here we show the application to simulated data where we want to impute a categorical variable with 4 levels containing some missing entries. Note that the function `fn_popcal_mi()` is flexible and can also handle categorical variables with a different number of (>2) levels. In the case of a binary variable with missing entries the function `fn_popcal_mi()` can be adapted following the description in [Pham et al](https://onlinelibrary.wiley.com/doi/full/10.1002/sim.8004).   
+The main aim of this example is to show how the function `fn_popcal_mi_cat()` provided in the R-Script `fn_popcal_mi_cat.R` can be applied. The function `fn_popcal_mi_cat()` implements the population-calibrated approach proposed by [Pham et al](https://onlinelibrary.wiley.com/doi/full/10.1002/sim.8004). In addition, we compare the population-calibrated imputation approach to the standard multiple imputation approach in `mice`. The application and comparison is based on simulated data. Here we show the application to simulated data where we want to impute a categorical variable with 4 levels containing some missing entries. Note that the function `fn_popcal_mi_cat()` is flexible and can also handle categorical variables with a different number of (>2) levels. In the case of a binary variable with missing entries the function `fn_popcal_mi_bin()` can be used.   
 
 ## Simulation of data
 
@@ -144,7 +144,7 @@ true_proportion_data
 
 ```
 
-We can use the function `fn_popcal_mi()` provided in the R-script `fn_popcal_mi.R`. For the function the following arguments need to be provided:
+We can use the function `fn_popcal_mi_cat()` provided in the R-script `fn_popcal_mi_cat.R`. For the function the following arguments need to be provided:
 
  - `data` data, containing all variables (including the missing variable) that should be used in the imputation model. The missing variable has to be of class factor.
  - `missing_covariate` the name of the missing covariate in the `data`. Must be a string/character.
@@ -155,7 +155,7 @@ We can use the function `fn_popcal_mi()` provided in the R-script `fn_popcal_mi.
 ```{r sim_popcal, message = FALSE, warning=FALSE,, results=FALSE}
 data <- data.sim %>% 
   dplyr::select(age, sex, country_mnar, outcome)
-data.popcal <- fn_popcal_mi(data=data, missing_covariate = "country_mnar", true_distribution = true_proportion_data, m=50)
+data.popcal <- fn_popcal_mi_cat(data=data, missing_covariate = "country_mnar", true_distribution = true_proportion_data, m=50)
 data.popcalmi <- data.popcal$imp
 
 
@@ -168,7 +168,7 @@ for (i in 1:50){
 }
 ```
 
-*Note. There is an additional (optional) parameter that can be provided to the function `fn_popcal_mi()` with default value `true_distribution_n=NULL`. This is used when the true distribution of the missing variable is known with uncertainty, i.e. is estimated from some data source. `true_distribution_n` then corresponds to the sample size of the data that was used to estimate the `external_proportion_true`. In this simulation study, we assume that there is no uncertainty associated with estimating the reference distribution. If we however assumed that we did not know the true distribution of the incomplete country variable, but estimate it from external data, the call of the funciton `fn_popcal_mi()` would be slighly different. With the earlier example of the external estimate `external_proportion_estimate` derived from external data with n=10000, it would be the following:* 
+*Note. There is an additional (optional) parameter that can be provided to the function `fn_popcal_mi_cat()` with default value `true_distribution_n=NULL`. This is used when the true distribution of the missing variable is known with uncertainty, i.e. is estimated from some data source. `true_distribution_n` then corresponds to the sample size of the data that was used to estimate the `external_proportion_true`. In this simulation study, we assume that there is no uncertainty associated with estimating the reference distribution. If we however assumed that we did not know the true distribution of the incomplete country variable, but estimate it from external data, the call of the funciton `fn_popcal_mi_cat()` would be slighly different. With the earlier example of the external estimate `external_proportion_estimate` derived from external data with n=10000, it would be the following:* 
 ```{r example_estimated_prop, eval = FALSE}
 f_popcal_mi(data=data, 
             missing_covariate = "country_mnar", 

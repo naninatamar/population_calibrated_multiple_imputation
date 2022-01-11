@@ -172,7 +172,7 @@ pre code {
 </div>
 
 
-<p>The main aim of this example is to show how the function <code>fn_popcal_mi()</code> provided in the R-Script <code>fn_popcal_mi.R</code> can be applied. The function <code>fn_popcal_mi()</code> implements the population-calibrated approach proposed by <a href="https://onlinelibrary.wiley.com/doi/full/10.1002/sim.8004">Pham et al</a>. In addition, we compare the population-calibrated imputation approach to the standard multiple imputation approach in <code>mice</code>. The application and comparison is based on simulated data. Here we show the application to simulated data where we want to impute a categorical variable with 4 levels containing some missing entries. Note that the function <code>fn_popcal_mi()</code> is flexible and can also handle categorical variables with a different number of (&gt;2) levels. In the case of a binary variable with missing entries the function <code>fn_popcal_mi()</code> can be adapted following the description in <a href="https://onlinelibrary.wiley.com/doi/full/10.1002/sim.8004">Pham et al</a>.</p>
+<p>The main aim of this example is to show how the function <code>fn_popcal_mi_cat()</code> provided in the R-Script <code>fn_popcal_mi_cat.R</code> can be applied. The function <code>fn_popcal_mi_cat()</code> implements the population-calibrated approach proposed by <a href="https://onlinelibrary.wiley.com/doi/full/10.1002/sim.8004">Pham et al</a>. In addition, we compare the population-calibrated imputation approach to the standard multiple imputation approach in <code>mice</code>. The application and comparison is based on simulated data. Here we show the application to simulated data where we want to impute a categorical variable with 4 levels containing some missing entries. Note that the function <code>fn_popcal_mi_cat()</code> is flexible and can also handle categorical variables with a different number of (&gt;2) levels. In the case of a binary variable with missing entries the function <code>fn_popcal_mi_bin()</code> can be used.</p>
 <div id="simulation-of-data" class="section level2">
 <h2>Simulation of data</h2>
 <p>We simulate data with 3 covariates (<code>sex</code>, <code>age</code>, <code>country</code>) which are linearly related to a unspecific outcome (<code>outcome</code>). We assume that the main analysis of interest is a linear regression between the dependent variable <code>outcome</code> and the independent variables <code>sex</code>, <code>age</code> and <code>country</code>. We assume that <code>country</code> has 4 levels (country A, B, C, D) and is missing for some observations. We simulate 1200 observations including 400 males and 800 females. For both males and females we assume that half of them is &lt;50 years old and half of them is 50+ years old. <code>country</code> levels are simulated using a multinomial distribution dependent on both <code>sex</code> and <code>age</code>. The <code>outcome</code> is simulated using a linear relationship with <code>age</code>, <code>sex</code>, and <code>country</code>. We construct a missing not at random indicator for observations whose <code>country</code> variable will be set to missing with the following:</p>
@@ -288,7 +288,7 @@ for (i in 1:50){
 <pre><code>## 
 ## country A country B country C country D 
 ##     0.277     0.209     0.353     0.161</code></pre>
-<p>We can use the function <code>fn_popcal_mi()</code> provided in the R-script <code>fn_popcal_mi.R</code>. For the function the following arguments need to be provided:</p>
+<p>We can use the function <code>fn_popcal_mi_cat()</code> provided in the R-script <code>fn_popcal_mi_cat.R</code>. For the function the following arguments need to be provided:</p>
 <ul>
 <li><code>data</code> data, containing all variables (including the missing variable) that should be used in the imputation model. The missing variable has to be of class factor.</li>
 <li><code>missing_covariate</code> the name of the missing covariate in the <code>data</code>. Must be a string/character.</li>
@@ -297,7 +297,7 @@ for (i in 1:50){
 </ul>
 <pre class="r"><code>data &lt;- data.sim %&gt;% 
   dplyr::select(age, sex, country_mnar, outcome)
-data.popcal &lt;- fn_popcal_mi(data=data, missing_covariate = &quot;country_mnar&quot;, true_distribution = true_proportion_data, m=50)
+data.popcal &lt;- fn_popcal_mi_cat(data=data, missing_covariate = &quot;country_mnar&quot;, true_distribution = true_proportion_data, m=50)
 data.popcalmi &lt;- data.popcal$imp
 
 
@@ -308,7 +308,7 @@ for (i in 1:50){
   data.temp$imp &lt;- i
   data.popcal.long &lt;- bind_rows(data.popcal.long, data.temp)
 }</code></pre>
-<p><em>Note. There is an additional (optional) parameter that can be provided to the function <code>fn_popcal_mi()</code> with default value <code>true_distribution_n=NULL</code>. This is used when the true distribution of the missing variable is known with uncertainty, i.e. is estimated from some data source. <code>true_distribution_n</code> then corresponds to the sample size of the data that was used to estimate the <code>external_proportion_true</code>. In this simulation study, we assume that there is no uncertainty associated with estimating the reference distribution. If we however assumed that we did not know the true distribution of the incomplete country variable, but estimate it from external data, the call of the funciton <code>fn_popcal_mi()</code> would be slighly different. With the earlier example of the external estimate <code>external_proportion_estimate</code> derived from external data with n=10000, it would be the following:</em></p>
+<p><em>Note. There is an additional (optional) parameter that can be provided to the function <code>fn_popcal_mi_cat()</code> with default value <code>true_distribution_n=NULL</code>. This is used when the true distribution of the missing variable is known with uncertainty, i.e. is estimated from some data source. <code>true_distribution_n</code> then corresponds to the sample size of the data that was used to estimate the <code>external_proportion_true</code>. In this simulation study, we assume that there is no uncertainty associated with estimating the reference distribution. If we however assumed that we did not know the true distribution of the incomplete country variable, but estimate it from external data, the call of the funciton <code>fn_popcal_mi_cat()</code> would be slighly different. With the earlier example of the external estimate <code>external_proportion_estimate</code> derived from external data with n=10000, it would be the following:</em></p>
 <pre class="r"><code>f_popcal_mi(data=data, 
             missing_covariate = &quot;country_mnar&quot;, 
             true_distribution = external_proportion_estimate, 

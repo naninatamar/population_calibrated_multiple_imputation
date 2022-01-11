@@ -1,16 +1,15 @@
-#' Function to multiply impute missing variable entries using 
-#' population calibrated multiple imutation. 
+#' Function to multiply impute missing variable entries for a binomial incomplete variable using 
+#' population calibrated multiple imputation. 
 #'
-#' @param data Data containing all variables (including the missing variable) that should be used in the imputation model. The missing variable has to be of class factor.
+#' @param data Data containing all variables (including the incomplete variable) that should be used in the imputation model. The incomplete variable has to be numeric with entries 0 and 1. 
 #' @param missing_covariate The name of the missing variable (which should be imputed) in the data. Must be a string/character. 
-#' @param true_prop A vector giving the true proportions of each level of the missing variable known on aggregate on the population level. The first entry has to correspond to 
-#' the proportion for the 1st level of the missing variable, the second entry of the vector to the second level of the missing variable etc. 
-#' @param true_prop_n Only used if the external distribution is estimated ("known with uncertainty"). Corresponds to the sample size true_distribution_n of the sample that was used to estimate the external_proportion_true.  
+#' @param true_prop A numeric giving the true proportion of incomplete variable == 1 known on aggregate on the population level.  
+#' @param true_prop_n Only used if the external distribution is estimated ("known with uncertainty"). Corresponds to the sample size true_distribution_n of the sample that was used to estimate the true_prop.  
 #' @param m The number of imputed datasets
 #' @return imp = a list containing the m imputation of the missing observations. Ordered such that the for each entry in the list, the first value corresponds to the first missing value, the second to the second etc. 
 #' all_converged = if TRUE then convergence was met in all 50 imputations. 
 
-fn_popcal_mi_binom <- function(data, missing_covariate, true_prop, true_prop_n = NULL, m=50){
+fn_popcal_mi_bin <- function(data, missing_covariate, true_prop, true_prop_n = NULL, m=50){
 imp <- list(NULL)
 if(!is.null(true_prop_n)){
   true_prop <- rnorm(1, mean = true_prop, sd = sqrt(true_prop*(1-true_prop)/true_prop_n))
